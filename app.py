@@ -2,7 +2,6 @@ import os
 import asyncio
 import threading
 from flask import Flask
-from bot import main
 
 app = Flask(__name__)
 
@@ -14,16 +13,17 @@ def home():
 def health():
     return "OK"
 
-def run_bot():
-    """Запускаем бота в отдельном потоке"""
-    asyncio.run(main())  # ВОТ ТАК ПРАВИЛЬНО — через asyncio.run()
+def run_flask():
+    """Запускаем Flask в фоновом потоке (а не бота)"""
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host='0.0.0.0', port=port, use_reloader=False, threaded=True)
 
 if __name__ == '__main__':
-    # Запускаем бота в фоновом потоке
-    bot_thread = threading.Thread(target=run_bot)
-    bot_thread.daemon = True  # Поток завершится вместе с main
-    bot_thread.start()
+    # Запускаем Flask в отдельном потоке
+    flask_thread = threading.Thread(target=run_flask)
+    flask_thread.daemon = True
+    flask_thread.start()
     
-    # Запускаем Flask для Render
-    port = int(os.environ.get("PORT", 5000))
-    app.run(host='0.0.0.0', port=port)
+    # Бота запускаем в главном потоке
+    from bot import main
+    asyncio.run(main())
