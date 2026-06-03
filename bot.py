@@ -11,6 +11,7 @@ load_dotenv()
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 ADMIN_ID = int(os.getenv("ADMIN_ID"))
+LOG_CHANNEL_ID = int(os.getenv("LOG_CHANNEL_ID"))
 
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
@@ -31,7 +32,6 @@ def check_rate_limit(user_id):
     if user_id not in user_requests:
         user_requests[user_id] = []
 
-    # Очищаем запросы старше 1 секунды
     user_requests[user_id] = [t for t in user_requests[user_id] if (now - t).seconds < 1]
 
     if len(user_requests[user_id]) >= 1:
@@ -39,6 +39,30 @@ def check_rate_limit(user_id):
 
     user_requests[user_id].append(now)
     return True
+
+# ==================== ЛОГИРОВАНИЕ В TELEGRAM КАНАЛ ====================
+async def log_to_channel(user_id, username, first_name, text):
+    """Отправляет лог сообщения в закрытый Telegram-канал"""
+    try:
+        # Не логируем самого админа (чтобы не спамить себе в канал)
+        if user_id == ADMIN_ID:
+            return
+        
+        now = datetime.now().strftime("%H:%M:%S")
+        
+        log_text = (
+            f"📨 *Новое сообщение*\n"
+            f"🕒 `{now}`\n"
+            f"🆔 ID: `{user_id}`\n"
+            f"👤 Имя: {first_name}\n"
+            f"📛 Юзернейм: @{username if username else 'нет'}\n"
+            f"💬 Текст:\n"
+            f"`{text[:500]}`"
+        )
+        
+        await bot.send_message(chat_id=LOG_CHANNEL_ID, text=log_text, parse_mode="Markdown")
+    except Exception as e:
+        print(f"Ошибка отправки лога в канал: {e}")
 
 # ==================== КЛАВИАТУРЫ ====================
 def get_main_keyboard(is_admin=False):
@@ -144,6 +168,14 @@ async def start(message: types.Message):
     if not check_rate_limit(message.from_user.id):
         await message.answer("⏳ Слишком много запросов! Подожди секунду.")
         return
+    
+    await log_to_channel(
+        message.from_user.id,
+        message.from_user.username,
+        message.from_user.first_name,
+        "/start"
+    )
+    
     db.add_user(message.from_user.id, message.from_user.username, message.from_user.first_name)
     has_access = await check_and_force_subscription(message)
     if not has_access:
@@ -159,6 +191,14 @@ async def all_scripts(message: types.Message):
     if not check_rate_limit(message.from_user.id):
         await message.answer("⏳ Слишком много запросов! Подожди секунду.")
         return
+    
+    await log_to_channel(
+        message.from_user.id,
+        message.from_user.username,
+        message.from_user.first_name,
+        "📜 Нажал 'Все скрипты'"
+    )
+    
     if not await check_and_force_subscription(message):
         return
     scripts = db.get_all_scripts()
@@ -175,6 +215,14 @@ async def search_start(message: types.Message):
     if not check_rate_limit(message.from_user.id):
         await message.answer("⏳ Слишком много запросов! Подожди секунду.")
         return
+    
+    await log_to_channel(
+        message.from_user.id,
+        message.from_user.username,
+        message.from_user.first_name,
+        "🔎 Активировал поиск"
+    )
+    
     if not await check_and_force_subscription(message):
         return
     search_mode[message.from_user.id] = True
@@ -185,6 +233,14 @@ async def help_command(message: types.Message):
     if not check_rate_limit(message.from_user.id):
         await message.answer("⏳ Слишком много запросов! Подожди секунду.")
         return
+    
+    await log_to_channel(
+        message.from_user.id,
+        message.from_user.username,
+        message.from_user.first_name,
+        "📖 Нажал 'Помощь'"
+    )
+    
     await message.answer(
         "📚 *Помощь*\n\n"
         "📜 Все скрипты - показать все скрипты\n"
@@ -209,17 +265,24 @@ async def premium_info(message: types.Message):
     else:
         await message.answer("⭐ *Премиум доступ*\n\nДля получения обратись к администратору.", parse_mode="Markdown")
 
-# ==================== ОБРАБОТЧИК ПОИСКА ====================
+# ==================== ОБРАБОТЧИК ПОИСКА (ДЛЯ ВСЕХ ПОЛЬЗОВАТЕЛЕЙ) ====================
 @dp.message(F.text)
 async def handle_search(message: types.Message):
     user_id = message.from_user.id
     
-    # Проверка на спам
     if not check_rate_limit(user_id):
         await message.answer("⏳ Слишком много запросов! Подожди секунду.")
         if search_mode.get(user_id):
             del search_mode[user_id]
         return
+    
+    # Логируем ВСЕ сообщения в канал
+    await log_to_channel(
+        user_id,
+        message.from_user.username,
+        message.from_user.first_name,
+        message.text
+    )
     
     # Если пользователь в режиме поиска
     if search_mode.get(user_id):
@@ -432,7 +495,7 @@ async def admin_input(message: types.Message):
         success, fail = 0, 0
         for i, uid in enumerate(users):
             try:
-                await message.copy_to(uid[0])  # users возвращает список кортежей (id, username, name)
+                await message.copy_to(uid[0])
                 success += 1
             except Exception:
                 fail += 1
