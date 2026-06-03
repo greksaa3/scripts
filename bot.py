@@ -300,6 +300,13 @@ admin_states = {}
 
 @dp.message(F.text == "👑 Админ панель")
 async def admin_panel(message: types.Message):
+    print(f"🔍 Кто-то нажал админку! USER_ID: {message.from_user.id}, ADMIN_ID: {ADMIN_ID}")  # ← ДОБАВЬ ЭТО
+    
+    if message.from_user.id != ADMIN_ID:
+        await message.answer("❌ У вас нет прав для этого действия!")
+        return
+    
+    await message.answer("👑 Админ панель", reply_markup=get_admin_keyboard())
     if message.from_user.id != ADMIN_ID:
         await message.answer("❌ У вас нет прав для этого действия!")
         return
@@ -480,3 +487,12 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
+# ==================== ПРИНУДИТЕЛЬНЫЙ ХЕНДЛЕР АДМИНКИ ====================
+@dp.message(lambda message: message.text and "Админ панель" in message.text)
+async def force_admin_panel(message: types.Message):
+    print(f"🔥 СРАБОТАЛ ПРИНУДИТЕЛЬНЫЙ ХЕНДЛЕР! ID: {message.from_user.id}")
+    if message.from_user.id != ADMIN_ID:
+        await message.answer("❌ Нет прав!")
+        return
+    await message.answer("👑 Админ панель (принудительно)", reply_markup=get_admin_keyboard())
