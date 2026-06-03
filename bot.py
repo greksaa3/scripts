@@ -1,15 +1,11 @@
 import os
 import asyncio
-from datetime import datetime, timedelta
+from datetime import datetime
 from dotenv import load_dotenv
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
 from aiogram.types import ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton
 from database import db
-
-
-
-
 
 load_dotenv()
 
@@ -21,32 +17,28 @@ dp = Dispatcher()
 
 # Хранилище для поиска
 search_results = {}
+search_mode = {}  # Кто сейчас в режиме поиска
 
 # Лимиты на запросы от одного пользователя
 user_requests = {}
-from datetime import datetime
-
 
 def check_rate_limit(user_id):
-    """Защита от спама - не более 10 запросов в минуту"""
+    """Защита от спама - не более 1 запроса в секунду. Админ не ограничен."""
+    if user_id == ADMIN_ID:
+        return True
+    
     now = datetime.now()
     if user_id not in user_requests:
         user_requests[user_id] = []
 
-    # Очищаем старые запросы (старше минуты)
-    user_requests[user_id] = [t for t in user_requests[user_id] if (now - t).seconds < 60]
+    # Очищаем запросы старше 1 секунды
+    user_requests[user_id] = [t for t in user_requests[user_id] if (now - t).seconds < 1]
 
-    if len(user_requests[user_id]) >= 10:
+    if len(user_requests[user_id]) >= 1:
         return False
 
     user_requests[user_id].append(now)
     return True
-
-
-# Добавь эту проверку в начало каждого хендлера:
-# if not check_rate_limit(message.from_user.id):
-#     await message.answer("⏳ Слишком много запросов! Подожди минутку.")
-#     return
 
 # ==================== КЛАВИАТУРЫ ====================
 def get_main_keyboard(is_admin=False):
@@ -58,7 +50,6 @@ def get_main_keyboard(is_admin=False):
     if is_admin:
         buttons.append([KeyboardButton(text="👑 Админ панель")])
     return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
-
 
 def get_admin_keyboard():
     buttons = [
@@ -72,7 +63,6 @@ def get_admin_keyboard():
     ]
     return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
 
-
 def get_subscription_keyboard(channels):
     buttons = []
     for channel_data in channels:
@@ -84,7 +74,6 @@ def get_subscription_keyboard(channels):
         buttons.append([InlineKeyboardButton(text=f"📢 Подписаться: {channel_name}", url=link)])
     buttons.append([InlineKeyboardButton(text="🔄 Проверить подписку", callback_data="check_sub")])
     return InlineKeyboardMarkup(inline_keyboard=buttons)
-
 
 def get_paginated_keyboard(items, page, items_per_page=5):
     if not items:
@@ -110,7 +99,6 @@ def get_paginated_keyboard(items, page, items_per_page=5):
 
     return InlineKeyboardMarkup(inline_keyboard=keyboard), total_pages
 
-
 # ==================== ПРОВЕРКА ПОДПИСКИ ====================
 async def check_all_subscriptions(user_id):
     if user_id == ADMIN_ID:
@@ -131,7 +119,6 @@ async def check_all_subscriptions(user_id):
             not_subscribed.append((channel_id, channel_username, channel_name))
     return len(not_subscribed) == 0, not_subscribed
 
-
 async def check_and_force_subscription(message):
     user_id = message.from_user.id
     if user_id == ADMIN_ID:
@@ -151,10 +138,12 @@ async def check_and_force_subscription(message):
         return False
     return True
 
-
 # ==================== ОСНОВНЫЕ КОМАНДЫ ====================
 @dp.message(Command("start"))
 async def start(message: types.Message):
+    if not check_rate_limit(message.from_user.id):
+        await message.answer("⏳ Слишком много запросов! Подожди секунду.")
+        return
     db.add_user(message.from_user.id, message.from_user.username, message.from_user.first_name)
     has_access = await check_and_force_subscription(message)
     if not has_access:
@@ -165,9 +154,11 @@ async def start(message: types.Message):
         reply_markup=get_main_keyboard(message.from_user.id == ADMIN_ID)
     )
 
-
 @dp.message(F.text == "📜 Все скрипты")
 async def all_scripts(message: types.Message):
+    if not check_rate_limit(message.from_user.id):
+        await message.answer("⏳ Слишком много запросов! Подожди секунду.")
+        return
     if not await check_and_force_subscription(message):
         return
     scripts = db.get_all_scripts()
@@ -179,30 +170,21 @@ async def all_scripts(message: types.Message):
     await message.answer(f"📚 *Все скрипты* - {len(scripts)} шт.\n📄 Страница 1 из {total}", parse_mode="Markdown",
                          reply_markup=keyboard)
 
-
 @dp.message(F.text == "🔎 Поиск")
 async def search_start(message: types.Message):
+    if not check_rate_limit(message.from_user.id):
+        await message.answer("⏳ Слишком много запросов! Подожди секунду.")
+        return
     if not await check_and_force_subscription(message):
         return
+    search_mode[message.from_user.id] = True
     await message.answer("🔍 *Введи название скрипта:*\n\nПример: `Auto Farm`, `ESP`, `Speed`", parse_mode="Markdown")
-
-    @dp.message()
-    async def search_query(msg: types.Message):
-        if msg.from_user.id != message.from_user.id:
-            return
-        dp.message_handlers.unregister(search_query)
-        results = db.search_scripts(msg.text)
-        if not results:
-            await msg.answer(f"❌ Ничего не найдено по запросу '{msg.text}'")
-            return
-        search_results[msg.from_user.id] = results
-        keyboard, total = get_paginated_keyboard(results, 1, 5)
-        await msg.answer(f"🔍 *Результаты:* {len(results)} скриптов\n📄 Страница 1 из {total}", parse_mode="Markdown",
-                         reply_markup=keyboard)
-
 
 @dp.message(F.text == "📖 Помощь")
 async def help_command(message: types.Message):
+    if not check_rate_limit(message.from_user.id):
+        await message.answer("⏳ Слишком много запросов! Подожди секунду.")
+        return
     await message.answer(
         "📚 *Помощь*\n\n"
         "📜 Все скрипты - показать все скрипты\n"
@@ -217,14 +199,40 @@ async def help_command(message: types.Message):
         parse_mode="Markdown"
     )
 
-
 @dp.message(F.text == "⭐ Премиум доступ")
 async def premium_info(message: types.Message):
+    if not check_rate_limit(message.from_user.id):
+        await message.answer("⏳ Слишком много запросов! Подожди секунду.")
+        return
     if db.get_premium(message.from_user.id):
         await message.answer("✅ *У тебя есть Премиум доступ!*", parse_mode="Markdown")
     else:
         await message.answer("⭐ *Премиум доступ*\n\nДля получения обратись к администратору.", parse_mode="Markdown")
 
+# ==================== ОБРАБОТЧИК ПОИСКА ====================
+@dp.message(F.text)
+async def handle_search(message: types.Message):
+    user_id = message.from_user.id
+    
+    # Проверка на спам
+    if not check_rate_limit(user_id):
+        await message.answer("⏳ Слишком много запросов! Подожди секунду.")
+        if search_mode.get(user_id):
+            del search_mode[user_id]
+        return
+    
+    # Если пользователь в режиме поиска
+    if search_mode.get(user_id):
+        del search_mode[user_id]
+        results = db.search_scripts(message.text)
+        if not results:
+            await message.answer(f"❌ Ничего не найдено по запросу '{message.text}'")
+            return
+        search_results[user_id] = results
+        keyboard, total = get_paginated_keyboard(results, 1, 5)
+        await message.answer(f"🔍 *Результаты:* {len(results)} скриптов\n📄 Страница 1 из {total}", parse_mode="Markdown",
+                             reply_markup=keyboard)
+        return
 
 # ==================== КОЛБЭКИ ====================
 @dp.callback_query(lambda c: c.data and c.data.startswith("script_"))
@@ -243,13 +251,12 @@ async def view_script(callback: types.CallbackQuery):
         await callback.answer("Скрипт не найден!", show_alert=True)
         return
 
-    script_id, name, code = script
+    _, name, code = script
     await callback.message.answer(
         f"📜 *{name}*\n\n```lua\n{code}\n```",
         parse_mode="Markdown"
     )
     await callback.answer()
-
 
 @dp.callback_query(lambda c: c.data and c.data.startswith("page_"))
 async def paginate(callback: types.CallbackQuery):
@@ -266,7 +273,6 @@ async def paginate(callback: types.CallbackQuery):
     )
     await callback.answer()
 
-
 @dp.callback_query(lambda c: c.data == "check_sub")
 async def check_sub(callback: types.CallbackQuery):
     subscribed, not_subscribed = await check_all_subscriptions(callback.from_user.id)
@@ -279,32 +285,35 @@ async def check_sub(callback: types.CallbackQuery):
                                          reply_markup=get_subscription_keyboard(not_subscribed))
     await callback.answer()
 
-
 # ==================== АДМИН ПАНЕЛЬ ====================
 @dp.message(F.text == "👑 Админ панель")
 async def admin_panel(message: types.Message):
     if message.from_user.id != ADMIN_ID:
+        await message.answer("❌ У вас нет прав для этого действия!")
+        return
+    if not check_rate_limit(message.from_user.id):
+        await message.answer("⏳ Слишком много запросов! Подожди секунду.")
         return
     await message.answer("👑 Админ панель", reply_markup=get_admin_keyboard())
 
-
 @dp.message(F.text == "🔙 Назад")
 async def back_to_main(message: types.Message):
-    await message.answer("Главное меню:", reply_markup=get_main_keyboard(message.from_user.id == ADMIN_ID))
-
+    if message.from_user.id != ADMIN_ID:
+        await message.answer("❌ У вас нет прав!", reply_markup=get_main_keyboard(False))
+        return
+    await message.answer("Главное меню:", reply_markup=get_main_keyboard(True))
 
 admin_states = {}
-
 
 @dp.message(F.text == "➕ Добавить скрипт")
 async def add_script_start(message: types.Message):
     if message.from_user.id != ADMIN_ID:
+        await message.answer("❌ У вас нет прав для этого действия!")
         return
     admin_states[message.from_user.id] = {"step": "name"}
     await message.answer(
         "📝 *Добавление скрипта*\n\n**Шаг 1/2:** Введи название скрипта\nПример: `Auto Farm X`, `ESP Plus`",
         parse_mode="Markdown")
-
 
 @dp.message(F.text == "📋 Список скриптов")
 async def list_scripts(message: types.Message):
@@ -321,7 +330,6 @@ async def list_scripts(message: types.Message):
     await message.answer("📋 *Список скриптов* (нажми для удаления):", parse_mode="Markdown",
                          reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons))
 
-
 @dp.message(F.text == "📢 Рассылка")
 async def broadcast_start(message: types.Message):
     if message.from_user.id != ADMIN_ID:
@@ -329,14 +337,12 @@ async def broadcast_start(message: types.Message):
     admin_states[message.from_user.id] = {"step": "broadcast"}
     await message.answer("📢 Отправь сообщение для рассылки:")
 
-
 @dp.message(F.text == "➕ Добавить канал")
 async def add_channel_start(message: types.Message):
     if message.from_user.id != ADMIN_ID:
         return
     admin_states[message.from_user.id] = {"step": "channel_id"}
-    await message.answer("📢 Введи ID канала:")
-
+    await message.answer("📢 Введи ID канала (число):")
 
 @dp.message(F.text == "❌ Удалить канал")
 async def remove_channel_start(message: types.Message):
@@ -351,20 +357,22 @@ async def remove_channel_start(message: types.Message):
         buttons.append([InlineKeyboardButton(text=f"❌ {ch[2]}", callback_data=f"delchan_{ch[0]}")])
     await message.answer("Выбери канал для удаления:", reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons))
 
-
 @dp.message(F.text == "⭐ Выдать премиум")
 async def give_premium_start(message: types.Message):
     if message.from_user.id != ADMIN_ID:
         return
     admin_states[message.from_user.id] = {"step": "premium"}
-    await message.answer("👤 Введи ID пользователя:")
+    await message.answer("👤 Введи ID пользователя (число):")
 
-
-@dp.message()
+# АДМИНСКИЙ ВВОД (только для ADMIN_ID)
+@dp.message(F.text)
 async def admin_input(message: types.Message):
     user_id = message.from_user.id
+    
+    # Только для админа и только если есть активное состояние
     if user_id != ADMIN_ID or user_id not in admin_states:
         return
+    
     state = admin_states[user_id]
     step = state.get("step")
 
@@ -385,8 +393,8 @@ async def admin_input(message: types.Message):
             state["channel_id"] = int(message.text)
             state["step"] = "channel_username"
             await message.answer("📢 Введи username канала (или 'нет'):")
-        except:
-            await message.answer("❌ Введи число!")
+        except ValueError:
+            await message.answer("❌ Ошибка! Введи число (ID канала).")
         return
 
     if step == "channel_username":
@@ -395,7 +403,7 @@ async def admin_input(message: types.Message):
             username = ""
         state["channel_username"] = username
         state["step"] = "channel_name"
-        await message.answer("📢 Введи название канала:")
+        await message.answer("📢 Введи название канала (как будет отображаться у пользователей):")
         return
 
     if step == "channel_name":
@@ -408,58 +416,56 @@ async def admin_input(message: types.Message):
         try:
             uid = int(message.text)
             db.set_premium(uid, True)
-            await message.answer(f"✅ Премиум выдан {uid}!")
-        except:
-            await message.answer("❌ Введи ID!")
+            await message.answer(f"✅ Премиум выдан пользователю {uid}!")
+        except ValueError:
+            await message.answer("❌ Ошибка! Введи число (ID пользователя).")
         del admin_states[user_id]
         return
 
     if step == "broadcast":
         users = db.get_all_users()
         if not users:
-            await message.answer("❌ Нет пользователей!")
+            await message.answer("❌ Нет пользователей для рассылки!")
             del admin_states[user_id]
             return
         status = await message.answer(f"📡 Рассылка для {len(users)} пользователей...")
         success, fail = 0, 0
         for i, uid in enumerate(users):
             try:
-                await message.copy_to(uid)
+                await message.copy_to(uid[0])  # users возвращает список кортежей (id, username, name)
                 success += 1
-            except:
+            except Exception:
                 fail += 1
             if i % 10 == 0:
                 await asyncio.sleep(0.5)
-        await status.edit_text(f"✅ Готово!\n✅ {success}\n❌ {fail}")
+        await status.edit_text(f"✅ Рассылка завершена!\n✅ Успешно: {success}\n❌ Ошибок: {fail}")
         del admin_states[user_id]
         return
-
 
 @dp.callback_query(lambda c: c.data and c.data.startswith("del_"))
 async def delete_script(callback: types.CallbackQuery):
     if callback.from_user.id != ADMIN_ID:
+        await callback.answer("❌ Нет прав!", show_alert=True)
         return
     script_id = int(callback.data.replace("del_", ""))
     db.delete_script(script_id)
     await callback.message.edit_text("✅ Скрипт удалён!")
     await callback.answer()
 
-
 @dp.callback_query(lambda c: c.data and c.data.startswith("delchan_"))
 async def delete_channel(callback: types.CallbackQuery):
     if callback.from_user.id != ADMIN_ID:
+        await callback.answer("❌ Нет прав!", show_alert=True)
         return
     channel_id = int(callback.data.replace("delchan_", ""))
     db.remove_channel(channel_id)
     await callback.message.edit_text("✅ Канал удалён!")
     await callback.answer()
 
-
 # ==================== ЗАПУСК ====================
 async def main():
     print("🚀 ROBLOX SCRIPT HUB запущен!")
     await dp.start_polling(bot)
-
 
 if __name__ == "__main__":
     asyncio.run(main())
